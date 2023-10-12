@@ -11,7 +11,7 @@ const movie1 = {
   "Type": "movie",
   "Poster": "https://m.media-amazon.com/images/M/MV5BOTY4YjI2N2MtYmFlMC00ZjcyLTg3YjEtMDQyM2ZjYzQ5YWFkXkEyXkFqcGdeQXVyMTQxNzMzNDI@._V1_SX300.jpg"
 }
- const APIURL = 'http://www.omdbapi.com/?i=tt3896198&apikey=ca7e8933'
+ const APIURL = 'https://www.omdbapi.com/?i=tt3896198&apikey=ca7e8933'
 const App = () => {
  const [movies, setMovies] = useState([]);
  const [searchTerm,setSearchTerm] = useState('');
