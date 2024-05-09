@@ -1,0 +1,1828 @@
+//////////////////
+//Italy QQ JS
+/////////////////
+(function () {
+  if (
+    !(typeof jQuery === 'function') ||
+    !document.querySelectorAll('#qq-form').length ||
+    !document.querySelectorAll('body.it').length
+  ) {
+    return;
+  }
+  var quickQuoteForm = {
+    // DOM ref to the <form>
+    $form: null,
+
+    // DOM ref to the err msg <span>
+    $errMsgEl: null,
+
+    // Form submit url prefix
+    SUBMIT_URL_PRE:
+      'https://viaggiare.columbusassicurazioni.it/landingService.cfm?goingToOtherCountries=Y&agentCode=AIT&locale=it_IT&',
+
+    // default sourceCode value
+    DEFAULT_SORUCE_CODE: 'TESINT',
+
+    // one of the cover types that forces dynamic behaviour
+    ANNUAL_COVER_VALUE: 'MT_MT_N',
+
+    // TODO: maybe not needed
+    // Anything else apart from the below value cause the age drop downs to display
+    INDIVIDUAL_GROUP_TYPE_VALUE: 'IND',
+
+    COUPLE_GROUP_TYPE_VALUE: 'CPL',
+
+    FAMILY_GROUP_TYPE_VALUE: 'FAM',
+
+    GROUP_GROUP_TYPE_VALUE: 'GRP',
+
+    // Max amount of individualls allowed per quote
+    MAX_NUM_PARTY_MEMBERS: 8,
+
+    ERR_MSGS: {
+      errorMSG_minPartySize:
+        'Ci deve essere almeno una persona in ogni polizza.',
+      errorMSG_maxPartySize:
+        "Per acquisti online è possibile assicurare solo fino 8 persone. Per gruppi piu' numerosi da assicurare è necessario contattare il servizio clienti via email o via telefono.",
+      errorMSG_partySize_IND:
+        'Ci puo essere soltanto una persona nella polizza individuale.',
+      errorMSG_partySize_CPL:
+        'Questo può essere solo per due persone che viaggiano insieme.',
+      errorMSG_partySize_FAM:
+        "In una polizza famiglia bisogna assicurare almeno un bambino e non è possibile includere piu' di 2 adulti (madre e/o padre).",
+      errorMSG_partySize_GRP:
+        'Ci devono essere almeno due persone nella polizza per gruppi.',
+      errorMSG_mandatoryFields:
+        'Compila tutti i campi obbligatori per procedure',
+      errorMSG_exceedsDateRangeAllowedForAdults65Plus:
+        "Per coloro con un'età superiore ai 65 anni, non offriamo polizze viaggio singolo oltre 31 giorni.",
+      errorMSG_kidCall:
+        "l'acquisto di una polizza per minore è possibile solo telefonicamente allo 800 986 782 dal lunedì al venerdì dalle 10:00 alle 18:00",
+    },
+
+    // Key val pair of inputs/selects and their values
+    formData: {
+      responseCode: '',
+    },
+
+    helpers: {
+      getParameterByName: function (name, url) {
+        if (!url) url = window.location.href;
+        name = name.replace(/[\[\]]/g, '\\$&');
+        var regex = new RegExp('[?&]' + name + '(=([^&#]*)|&|#|$)'),
+          results = regex.exec(url);
+        if (!results) return null;
+        if (!results[2]) return '';
+        return decodeURIComponent(results[2].replace(/\+/g, ' '));
+      },
+
+      getCookie: function (a) {
+        var c = '',
+          b = ' ' + document.cookie + ';',
+          d = ' ' + a + '=';
+        a = b.indexOf(d);
+        if (a != -1) {
+          a += d.length;
+          c = b.indexOf(';', a);
+          c = unescape(b.substring(a, c));
+        }
+        return c;
+      },
+    },
+
+    /**
+     * Reset form data
+     */
+    resetFormData: function () {
+      this.formData = {
+        responseCode: '',
+      };
+    },
+
+    /**
+     * Shows err msg, scrolls and highlights  area
+     * @param {Object} result
+     */
+    handleError: function (result) {
+      if (!result) return;
+      var _self = this,
+        errMsg = result.errMsg,
+        el = result.el ? result.el : null,
+        GENERIC_ERR_VISIBLE_CLASS = 'qq-form__err-msg--visible',
+        INPUT_ERR_CLASS = 'qq-form_input-err',
+        INPUT_ERR_CLASS_SELECTOR = '.' + INPUT_ERR_CLASS;
+
+      // Populate & show err msg
+      _self.$errMsgEl.text(errMsg).addClass(GENERIC_ERR_VISIBLE_CLASS);
+
+      // Highlight input(s)
+      el && $(el).addClass(INPUT_ERR_CLASS);
+
+      // Scroll to err msg
+      if ($('.triggered-qq-modal').length == 0) {
+        $('html, body').animate(
+          {
+            // 17 = padding top inc border width
+            scrollTop: _self.$form.offset().top - 17,
+          },
+          500,
+        );
+      }
+
+      // Hide msg on modify
+      $(INPUT_ERR_CLASS_SELECTOR).on('change', function () {
+        $(this).removeClass(INPUT_ERR_CLASS).unbind('change');
+
+        var noOtherErrors = $(INPUT_ERR_CLASS_SELECTOR).length === 0;
+        if (noOtherErrors) {
+          _self.$errMsgEl.text('').removeClass(GENERIC_ERR_VISIBLE_CLASS);
+        }
+      });
+    },
+
+    /**
+     * Binds onSubmit evt to form. Calls validate before submitting
+     */
+    bindOnSubmitEvtToForm: function () {
+      var _self = this;
+      this.$form.on('submit', function (e) {
+        e.preventDefault();
+
+        // reset
+        _self.resetFormData();
+
+        // value of this is <form> here so passing _self using call
+        var validateRes = _self.validateInputs.call(_self, this);
+        if (!validateRes.result) {
+          _self.handleError(validateRes);
+          if (
+            $('.triggered-qq-modal').length > 0 &&
+            $('.triggered-qq-modal .qq-form__title').length > 0
+          ) {
+            const elc = document.querySelector('.qq-form .qq-form__title');
+            elc.scrollIntoView();
+          }
+          return;
+        }
+
+        // Build vals derived from inputs
+        _self.buildDymanicValues();
+
+        // GO!
+        var submitURL = _self.buildSubmitURL();
+        // console.log('~~~~>>>', _self.formData);
+        window.location.href = submitURL;
+        return false;
+      });
+    },
+
+    /**
+     * Validates inputs before submission
+     * @param {DOM} <form>
+     */
+    validateInputs: function (form) {
+      // Handle radio btn errors
+      var _radioInputNames = [],
+        _checkedRadioInputNames = [],
+        _$radioInputs = this.$form.find('input[type="radio"]');
+
+      // This can be better optimised to use a list predefined
+      if (_$radioInputs.length) {
+        _$radioInputs.each(function (idx, el) {
+          if (_radioInputNames.indexOf(el.name) === -1) {
+            _radioInputNames.push(el.name);
+          }
+
+          // capture checked elements
+          if (el.checked && _checkedRadioInputNames.indexOf(el.name) === -1) {
+            _checkedRadioInputNames.push(el.name);
+          }
+        });
+
+        if (_checkedRadioInputNames.length !== _radioInputNames.length) {
+          return {
+            result: false,
+            errMsg: this.ERR_MSGS.errorMSG_mandatoryFields,
+          };
+        }
+      }
+
+      // common error handler
+      for (var i = 0; i < form.elements.length; i++) {
+        var el = form.elements[i];
+        // skip element for non required/relevant fields
+        var skipInput = el.dataset.skip === 'true';
+        if (skipInput || el.type === 'submit' || el.type === 'fieldset')
+          continue;
+
+        // non-required fields can have a blank value - don't flag as an err
+        var isRequired = el.dataset.required !== 'false';
+        if (!el.value && isRequired) {
+          // Error so reset vals
+          this.resetFormData();
+          return {
+            result: false,
+            el: el,
+            errMsg: this.ERR_MSGS.errorMSG_mandatoryFields,
+          };
+        }
+        // Avoid adding blank values. Radios always have a value
+        else if (
+          (el.type === 'radio' && el.checked) ||
+          (el.type !== 'radio' && el.value)
+        ) {
+          this.formData[el.name] = el.value;
+        }
+      }
+
+      var fieldValidationRes = this.runFieldSpecificValidations();
+      if (!fieldValidationRes.result) {
+        return fieldValidationRes;
+      }
+
+      return {
+        result: true,
+        errMsg: null,
+      };
+    },
+
+    /**
+     * Does validation based on selections and business rules
+     */
+    runFieldSpecificValidations: function () {
+      var _errMsg = {
+        result: true,
+        errMsg: null,
+      };
+      var adultSelectNames = ['AYG', 'AMD', 'AMR'];
+      var meetsMinReqPartySize = false;
+      var numberOfAdults = 0;
+      var numberOfAdults65Plus =
+        parseInt(this.formData['AMD']) + parseInt(this.formData['AMR']);
+      var totalPartySize = 0;
+      var numberOfChildrenAndInfants = 0;
+
+      // TODO: optimise to use key val pairs in formData instead of looping.
+      this.$form.find('#qq-form-age-wrap select').each(function (idx, el) {
+        var intVal = parseInt(el.value);
+        if (adultSelectNames.indexOf(el.name) !== -1 && intVal !== 0) {
+          numberOfAdults += intVal;
+          meetsMinReqPartySize = true;
+        } else {
+          numberOfChildrenAndInfants += intVal;
+        }
+        totalPartySize += intVal;
+      });
+
+      var exceedsMaxPartySize = totalPartySize > this.MAX_NUM_PARTY_MEMBERS;
+      var _gt = this.formData['groupType'];
+      var exceedsPartySizeForIND =
+        _gt === this.INDIVIDUAL_GROUP_TYPE_VALUE && totalPartySize > 1;
+      var exceedsPartySizeForCouples =
+        _gt === this.COUPLE_GROUP_TYPE_VALUE &&
+        (totalPartySize > 2 || numberOfAdults !== 2);
+      var exceedsDateRangeAllowedForAdults65Plus =
+        numberOfAdults65Plus > 0 && this.getNumberOfTripDays() > 31;
+      var numberOfAdultsNotMetForFamily =
+        _gt === this.FAMILY_GROUP_TYPE_VALUE &&
+        (numberOfAdults < 1 || numberOfAdults > 2);
+      var criteriaNotMetForFamilyPolicy =
+        _gt === this.FAMILY_GROUP_TYPE_VALUE &&
+        (numberOfChildrenAndInfants === 0 || numberOfAdultsNotMetForFamily);
+      var numberOfPartyTooLessForGroupPolicy =
+        _gt === this.GROUP_GROUP_TYPE_VALUE &&
+        (numberOfAdults < 1 || totalPartySize < 2);
+      var criteriaNotMetForKidsPolicy =
+        _gt === this.INDIVIDUAL_GROUP_TYPE_VALUE &&
+        numberOfChildrenAndInfants > 0;
+
+      switch (true) {
+        case criteriaNotMetForKidsPolicy:
+          _errMsg = {
+            result: false,
+            errMsg: this.ERR_MSGS.errorMSG_kidCall,
+          };
+          break;
+        case !meetsMinReqPartySize:
+          _errMsg = {
+            result: false,
+            errMsg: this.ERR_MSGS.errorMSG_minPartySize,
+          };
+          break;
+        case exceedsMaxPartySize:
+          _errMsg = {
+            result: false,
+            errMsg: this.ERR_MSGS.errorMSG_maxPartySize,
+          };
+          break;
+        case exceedsPartySizeForIND:
+          _errMsg = {
+            result: false,
+            errMsg: this.ERR_MSGS.errorMSG_partySize_IND,
+          };
+          break;
+        case exceedsPartySizeForCouples:
+          _errMsg = {
+            result: false,
+            errMsg: this.ERR_MSGS.errorMSG_partySize_CPL,
+          };
+          break;
+        case exceedsDateRangeAllowedForAdults65Plus:
+          _errMsg = {
+            result: false,
+            errMsg:
+              this.ERR_MSGS.errorMSG_exceedsDateRangeAllowedForAdults65Plus,
+          };
+          break;
+        case criteriaNotMetForFamilyPolicy:
+          _errMsg = {
+            result: false,
+            errMsg: this.ERR_MSGS.errorMSG_partySize_FAM,
+          };
+          break;
+        case numberOfPartyTooLessForGroupPolicy:
+          _errMsg = {
+            result: false,
+            errMsg: this.ERR_MSGS.errorMSG_partySize_GRP,
+          };
+          break;
+      }
+
+      return _errMsg;
+    },
+
+    /**
+     * Calculates date range
+     */
+    getNumberOfTripDays: function () {
+      var startDate = this.$form
+        .find('#qq-form-start-date')
+        .datepicker('getDate');
+      var endDate = this.$form.find('#qq-form-end-date').datepicker('getDate');
+      var _numOfTripDays = '';
+
+      if (startDate && endDate) {
+        var timeDiff = Math.abs(endDate.getTime() - startDate.getTime());
+        var diffDays = Math.ceil(timeDiff / (1000 * 3600 * 24));
+        // num of days are inclusive so add 1
+        _numOfTripDays = diffDays + 1;
+      }
+      return _numOfTripDays;
+    },
+
+    /**
+     * Adds to the list of query params for values that are
+     * derived from other inputs.
+     */
+    buildDymanicValues: function () {
+      // Append conditional params
+      var responseCodeVal =
+        this.getQueryParamFromWindowOrIframe('responseCode');
+      if (responseCodeVal) {
+        this.formData['responseCode'] = responseCodeVal;
+      }
+
+      var sourceCodeVal =
+        this.getQueryParamFromWindowOrIframe('sourceCode') ||
+        this.DEFAULT_SORUCE_CODE;
+      if (sourceCodeVal) {
+        this.formData['sourceCode'] = sourceCodeVal;
+      }
+
+      var selectedCoverType = this.formData['coverType'];
+      var policyTypeOption = selectedCoverType.replace('_N', '');
+      var policyType = selectedCoverType.substring(0, 2);
+
+      // Annual cover expects a blank endDate value or it won't take you to step 2
+      if (selectedCoverType === this.ANNUAL_COVER_VALUE) {
+        this.formData['endDate'] = '';
+      }
+
+      var _dynamicallyBuiltFormData = {
+        numberOfTripDays: this.getNumberOfTripDays(),
+        policyType: policyType,
+        winterSports: 'N',
+        policyTypeOption: policyTypeOption,
+        clickMe: true,
+        'form.policy_xml': '',
+      };
+
+      $.extend(this.formData, _dynamicallyBuiltFormData);
+    },
+
+    /**
+     * Constructs the URL to submit to from data captured
+     */
+    buildSubmitURL: function () {
+      const toSubmit = [];
+      for (var _formName in this.formData) {
+        if (this.formData[_formName] !== undefined) {
+          toSubmit.push(_formName + '=' + this.formData[_formName]);
+        }
+      }
+      var submitURL = encodeURI(this.SUBMIT_URL_PRE + toSubmit.join('&'));
+      return submitURL;
+    },
+
+    /**
+     * Handles dynamic change evts inside the form
+     */
+    bindChangeEvts: function () {
+      var _$form = this.$form;
+      var _self = this;
+      var $destinationsWrap = _$form.find('.qq-form__input-wrap--area');
+      var $destinationsDefault = _$form.find('#qq-form-area-default');
+      var $destinationsAnnual = _$form.find('#qq-form-area-annual');
+      var $endDate = _$form.find('#qq-form-end-date');
+      var DATA_SKIP_ATTR = 'data-skip';
+
+      $destinationsAnnual.remove();
+      _$form.find('[name="coverType"]').on('change', function (e) {
+        // show/hide + add attr that can be used to skip validation
+        if (e.target.value === _self.ANNUAL_COVER_VALUE) {
+          // TODO: handle skipping radio button selection here
+          $destinationsDefault.remove();
+          $destinationsAnnual.removeClass('hidden');
+          $destinationsWrap.append($destinationsAnnual);
+          $endDate
+            .attr(DATA_SKIP_ATTR, 'true')
+            .parent()
+            .addClass('qq-form__input-wrap--hidden');
+        } else {
+          $destinationsAnnual.remove();
+          $destinationsWrap.append($destinationsDefault);
+          $destinationsDefault.removeAttr(DATA_SKIP_ATTR);
+          $endDate
+            .removeAttr(DATA_SKIP_ATTR)
+            .parent()
+            .removeClass('qq-form__input-wrap--hidden');
+        }
+      });
+
+      // Show ages dd if anything other than valid selected
+      _$form
+        .find('[name="groupType"]')
+        .on('change', function (e) {
+          // radio will alwyays have a value so don't rely on it
+          var isRadio = e.target.type === 'radio';
+          var isChecked = e.target.checked;
+          if (isRadio && !isChecked) {
+            return;
+          }
+
+          if (e.target.value !== '') {
+            _$form
+              .find('#qq-form-age-wrap')
+              .addClass('qq-form__age-wrap--visible');
+          } else {
+            _$form
+              .find('#qq-form-age-wrap')
+              .removeClass('qq-form__age-wrap--visible');
+          }
+        })
+        // If user navigates back to page using browser and info is pre-filled trigger
+        // change so it shows age inputs
+        .trigger('change');
+    },
+
+    /**
+     * Initialises JQuery date picker
+     */
+    initDatePicker: function () {
+      var $formParent = this.$form.parent();
+      var _self = this;
+      var datePickerConfig = {
+        dateFormat: 'dd/mm/yy',
+        changeMonth: false,
+        changeYear: false,
+        minDate: 0,
+        maxDate: '+364D',
+        onSelect: function () {
+          $(this).trigger('change');
+        },
+        beforeShow: function () {
+          $formParent
+            .find('.qq-form__datepicker-overlay')
+            .addClass('qq-form__datepicker-overlay--show');
+        },
+        onClose: function () {
+          $formParent
+            .find('.qq-form__datepicker-overlay')
+            .removeClass('qq-form__datepicker-overlay--show');
+        },
+      };
+
+      this.$form
+        .find('#qq-form-start-date')
+        .datepicker(datePickerConfig)
+        .on('change', function () {
+          var annualCoverSelected =
+            _self.formData['coverType'] &&
+            _self.formData['coverType'] !==
+              _self.formData[_self.ANNUAL_COVER_VALUE];
+          if (annualCoverSelected) {
+            return;
+          }
+
+          var _parsedDate = $.datepicker.parseDate('dd/mm/yy', this.value);
+          var today = new Date();
+          // take the max of a year from today or from selected day
+          var maxDate = new Date(
+            Math.max(_parsedDate.valueOf(), today.valueOf()),
+          );
+          maxDate.setDate(maxDate.getDate() + 364);
+
+          _self.$form
+            .find('#qq-form-end-date')
+            .datepicker('option', 'minDate', _parsedDate);
+          _self.$form
+            .find('#qq-form-end-date')
+            .datepicker('option', 'maxDate', maxDate);
+        });
+
+      this.$form
+        .find('#qq-form-end-date')
+        .datepicker(datePickerConfig)
+        .on('change', function () {
+          var _parsedDate = $.datepicker.parseDate('dd/mm/yy', this.value);
+          _self.$form
+            .find('#qq-form-start-date')
+            .datepicker('option', 'maxDate', _parsedDate);
+        });
+    },
+
+    /**
+     * Reads query param val from iframe or window
+     * @param {String} key
+     */
+    getQueryParamFromWindowOrIframe: function (key) {
+      var code =
+        this.helpers.getParameterByName(key) ||
+        this.helpers.getParameterByName(
+          key,
+          $('.it-hp-iframe-container').attr('src'),
+        );
+      return code ? code : '';
+    },
+
+    /**
+     * If query param has "sourcecode" populate promoCode input
+     */
+    populatePromoCodeInput: function () {
+      var sourceCode =
+        this.getQueryParamFromWindowOrIframe('sourceCode') ||
+        this.DEFAULT_SORUCE_CODE;
+
+      if (sourceCode && sourceCode !== this.DEFAULT_SORUCE_CODE) {
+        this.$form.find('input[name="promotionCode"]:visible').val(sourceCode);
+      }
+    },
+
+    init: function () {
+      this.$form = $('#qq-form');
+      this.$errMsgEl = $('#qq-form-err-msgg');
+      this.bindOnSubmitEvtToForm();
+      this.bindChangeEvts();
+      this.initDatePicker();
+      this.populatePromoCodeInput();
+    },
+  };
+
+  // Start
+  quickQuoteForm.init.call(quickQuoteForm);
+})();
+$('.info-icon-img2').click(function () {
+  $('.info-container2').show();
+});
+$('.singletrip-close-img').click(function () {
+  $('.info-container2').hide();
+});
+
+//COZ & NZ//
+if ($('body').hasClass('au')) {
+  $('#datepicker').datepicker({
+    dateFormat: 'dd/mm/yy',
+    changeMonth: false,
+    changeYear: false,
+    minDate: 0,
+    maxDate: '+365D',
+  });
+  $('#datepicker2').datepicker({
+    dateFormat: 'dd/mm/yy',
+    changeMonth: false,
+    changeYear: false,
+    maxDate: '+365D',
+  });
+  $('#datepicker')
+    .datepicker()
+    .bind('change', function () {
+      var minValue = $(this).val();
+      minValue = $.datepicker.parseDate('dd/mm/yy', minValue);
+      $('#datepicker2').datepicker('option', 'minDate', minValue);
+      calculate();
+    });
+  $('#datepicker2')
+    .datepicker()
+    .bind('change', function () {
+      var maxValue = $(this).val();
+      maxValue = $.datepicker.parseDate('dd/mm/yy', maxValue);
+      calculate();
+    });
+
+  function calculate() {
+    var d1 = $('#datepicker').datepicker('getDate');
+    var d2 = $('#datepicker2').datepicker('getDate');
+    var diff = 1;
+    if (d1 && d2) {
+      diff = diff + Math.floor((d2.getTime() - d1.getTime()) / 86400000); // ms per day
+    }
+    $('.calculated').val(diff);
+  }
+  // Age selection //
+  $('#travellers').on('change', function () {
+    if ($(this).val() === '&numberOfTravellers=2') {
+      $('#otherType2').show();
+    } else {
+      $('#otherType2').hide();
+    }
+  });
+  $('#travellers').on('change', function () {
+    if ($(this).val() === '&numberOfTravellers=3') {
+      $('#otherType2, #otherType3').show();
+    } else {
+      $('#otherType3').hide();
+    }
+  });
+  $('#travellers').on('change', function () {
+    if ($(this).val() === '&numberOfTravellers=4') {
+      $('#otherType2, #otherType3, #otherType4').show();
+    } else {
+      $('#otherType4').hide();
+    }
+  });
+  $('#travellers').on('change', function () {
+    if ($(this).val() === '&numberOfTravellers=5') {
+      $('#otherType2, #otherType3, #otherType4, #otherType5').show();
+    } else {
+      $('#otherType5').hide();
+    }
+  });
+  $('#travellers').on('change', function () {
+    if ($(this).val() === '&numberOfTravellers=6') {
+      $(
+        '#otherType2, #otherType3, #otherType4, #otherType5, #otherType6',
+      ).show();
+    } else {
+      $('#otherType6').hide();
+    }
+  });
+  $('#travellers').on('change', function () {
+    if ($(this).val() === '&numberOfTravellers=7') {
+      $(
+        '#otherType2, #otherType3, #otherType4, #otherType5, #otherType6, #otherType7',
+      ).show();
+    } else {
+      $('#otherType7').hide();
+    }
+  });
+  $('#travellers').on('change', function () {
+    if ($(this).val() === '&numberOfTravellers=8') {
+      $(
+        '#otherType2, #otherType3, #otherType4, #otherType5, #otherType6, #otherType7, #otherType8',
+      ).show();
+    } else {
+      $('#otherType8').hide();
+    }
+  });
+}
+// Age selection //
+// Change destinations based on type of cover //
+if ($('body').hasClass('au')) {
+  $('#type').change(function () {
+    var val = $(this).val();
+    if (val === '&policyTypeOption=ST_ST') {
+      $('#destination').html(
+        '<option id="dom" value="&area=ALOZLOZAUS1">Domestic</option><option id="southp" value="&area=GLOZLOZAUS2">South Pacific</option><option id="asia" value="&area=HLOZLOZAUS6">Asia</option><option id="europe" value="&area=JLOZLOZAUS3">Europe</option><option id="wwexc" value="&area=KLOZLOZAUS4">Worldwide Excl. USA & Canada</option><option value="&area=LLOZLOZAUS5">Worldwide</option>',
+      );
+    } else if (val == '&policyTypeOption=MT_MT') {
+      $('#destination').html(
+        '<option id="wwexc" value="&area=KLOZLOZAUS4">Worldwide Excl. USA & Canada</option><option value="&area=LLOZLOZAUS5">Worldwide</option>',
+      );
+    } else if (val == '&policyTypeOption=ST_ST&winterSports=Y') {
+      $('#destination').html(
+        '<option id="dom" value="&area=ALOZLOZAUS1">Domestic</option><option id="southp" value="&area=GLOZLOZAUS2">South Pacific</option><option id="asia" value="&area=HLOZLOZAUS6">Asia</option><option id="europe" value="&area=JLOZLOZAUS3">Europe</option><option id="wwexc" value="&area=KLOZLOZAUS4">Worldwide Excl. USA & Canada</option><option value="&area=LLOZLOZAUS5">Worldwide</option>',
+      );
+    } else if (val == '&policyTypeOption=MT_MT&winterSports=Y') {
+      $('#destination').html(
+        '<option id="wwexc" value="&area=KLOZLOZAUS4">Worldwide Excl. USA & Canada</option><option value="&area=LLOZLOZAUS5">Worldwide</option>',
+      );
+    }
+  });
+
+  // Change destinations based on type of cover //
+
+  // Change datepicker based on type of cover //
+  $('#type').change(function () {
+    var val = $(this).val();
+    if (val === '&policyTypeOption=ST_ST') {
+      $('#return').show();
+    } else if (val == '&policyTypeOption=MT_MT') {
+      $('#return').hide();
+    } else if (val === '&policyTypeOption=ST_ST&winterSports=Y') {
+      $('#return').show();
+    } else if (val == '&policyTypeOption=MT_MT&winterSports=Y') {
+      $('#return').hide();
+    }
+  });
+  // Change datepicker based on type of cover //
+
+  // info icon click show and hide //
+  $('.info-icon-img').click(function () {
+    $('.info-container').show();
+  });
+  $('.info-icon-img2').click(function () {
+    $('.info-container2').show();
+  });
+  $('.info-icon-img3').click(function () {
+    $('.info-container3').show();
+  });
+  $('.info-icon-img4').click(function () {
+    $('.info-container4').show();
+  });
+  $('.info-icon-img-winter').click(function () {
+    $('.info-container-winter').show();
+  });
+  $('.info-icon-img-winter2').click(function () {
+    $('.info-container-winter2').show();
+  });
+  $('.singletrip-close-img').click(function () {
+    $(
+      '.info-container, .info-container2, .info-container3, .info-container4, .info-container-winter, .info-container-winter2',
+    ).hide();
+  });
+  // info icon click show and hide //
+
+  // Change info icons //
+  $('#type').change(function () {
+    var val = $(this).val();
+    if (val === '&policyTypeOption=ST_ST') {
+      $('.info-icon').show();
+    } else if (val == '&policyTypeOption=MT_MT') {
+      $(
+        '.info-icon, .info-icon3, .info-icon4, .info-icon5, .info-icon6, .info-icon-winter, .info-icon-winter2',
+      ).hide();
+    } else if (val == '&policyTypeOption=ST_ST&winterSports=Y') {
+      $('.info-icon-winter').show();
+    } else if (val == '&policyTypeOption=MT_MT&winterSports=Y') {
+      $(
+        '.info-icon, .info-icon2, .info-icon3, .info-icon4, .info-icon5, .info-icon6, .info-icon-winter',
+      ).hide();
+    }
+  });
+}
+if ($('body').hasClass('au')) {
+  $('#type').change(function () {
+    var val = $(this).val();
+    if (val === '&policyTypeOption=ST_ST') {
+      $('.info-icon2, .info-icon-winter, .info-icon-winter2').hide();
+    } else if (val == '&policyTypeOption=MT_MT') {
+      $('.info-icon2').show();
+    } else if (val == '&policyTypeOption=MT_MT&winterSports=Y') {
+      $('.info-icon-winter2').show();
+    } else if (val == '&policyTypeOption=ST_ST&winterSports=Y') {
+      $('.info-icon2, .info-icon-winter2, .info-icon').hide();
+    }
+  });
+  $('#destination').change(function () {
+    var val = $(this).val();
+    if (val === '&area=ALOZLOZAUS1') {
+      $('.info-icon3').show();
+    } else if (val == '&area=GLOZLOZAUS2') {
+      $(
+        '.info-icon-select, .info-icon3, .info-icon5, .info-icon6, .info-icon7, .info-icon8',
+      ).hide();
+    } else if (val == '&area=HLOZLOZAUS6') {
+      $(
+        '.info-icon-select, .info-icon3, .info-icon4, .info-icon6, .info-icon7, .info-icon8',
+      ).hide();
+    } else if (val == '&area=KLOZLOZAUS4') {
+      $(
+        '.info-icon-select, .info-icon3, .info-icon4, .info-icon5, .info-icon6, .info-icon8',
+      ).hide();
+    } else if (val == '&area=LLOZLOZAUS5') {
+      $(
+        '.info-icon-select, .info-icon3, .info-icon4, .info-icon5, .info-icon6, .info-icon7',
+      ).hide();
+    } else if (val == '&area=JLOZLOZAUS3') {
+      $(
+        '.info-icon-select, .info-icon3, .info-icon4, .info-icon5, .info-icon7, .info-icon8',
+      ).hide();
+    } else if (val == 'select') {
+      $(
+        '.info-icon3, .info-icon4, .info-icon5, .info-icon6, .info-icon7, info-icon8',
+      ).hide();
+    }
+  });
+  $('#destination').change(function () {
+    var val = $(this).val();
+    if (val === '&area=GLOZLOZAUS2') {
+      $('.info-icon4').show();
+    } else if (val == '&area=ALOZLOZAUS1') {
+      $(
+        '.info-icon-select, .info-icon4, .info-icon5, .info-icon6, .info-icon7, .info-icon8',
+      ).hide();
+    }
+  });
+  $('#destination').change(function () {
+    var val = $(this).val();
+    if (val === '&area=HLOZLOZAUS6') {
+      $('.info-icon5').show();
+    }
+  });
+  $('#destination').change(function () {
+    var val = $(this).val();
+    if (val === '&area=JLOZLOZAUS3') {
+      $('.info-icon6').show();
+    }
+  });
+  $('#destination').change(function () {
+    var val = $(this).val();
+    if (val === '&area=KLOZLOZAUS4') {
+      $('.info-icon7').show();
+    }
+  });
+  $('#destination').change(function () {
+    var val = $(this).val();
+    if (val === '&area=LLOZLOZAUS5') {
+      $('.info-icon8').show();
+    }
+  });
+  $('#destination').change(function () {
+    var val = $(this).val();
+    if (val === 'select') {
+      $('.info-icon-select').show();
+    }
+  });
+}
+// Change info icons //
+// Link build //
+if ($('body').hasClass('au')) {
+  $(document).on('click', '#make_url', function (e) {
+    var first =
+      $('#first').is(':visible') && $('#first').val() > 18 ? true : false;
+    var second =
+      $('#second').is(':visible') && $('#second').val() != '' ? true : false;
+    var second =
+      $('#third').is(':visible') && $('#third').val() != '' ? true : false;
+    var second =
+      $('#fourth').is(':visible') && $('#fourth').val() != '' ? true : false;
+    var second =
+      $('#fifth').is(':visible') && $('#fifth').val() != '' ? true : false;
+    var second =
+      $('#sixth').is(':visible') && $('#sixth').val() != '' ? true : false;
+    var second =
+      $('#seventh').is(':visible') && $('#seventh').val() != '' ? true : false;
+    var second =
+      $('#eigth').is(':visible') && $('#eigth').val() != '' ? true : false;
+
+    //if (!$('#first').val() == "" && $('#travellers').val() == "1")
+    // if (!$('#second').val() == "" && $('#travellers').val() == "&numberOfTravellers=2")
+    //if (!$('#third').val() == "" && $('#travellers').val() == "&numberOfTravellers=3")
+    //if (!$('#fourth').val() == "" && $('#travellers').val() == "&numberOfTravellers=4")
+    //if (!$('#fifth').val() == "" && $('#travellers').val() == "&numberOfTravellers=5")
+    //if (!$('#sixth').val() == "" && $('#travellers').val() == "&numberOfTravellers=6")
+    //if (!$('#seventh').val() ==""&& $('#travellers').val() == "&numberOfTravellers=7")
+    //if (!$('#eigth').val() == ""&& $('#travellers').val() == "&numberOfTravellers=8")
+    if (!$('#datepicker').val() == '')
+      if (!$('#datepicker2').val() == '')
+        if (!$('#destination').val() == '' && first) {
+          //alert('first: ' + first + $('#first').is(':visible') + ' second: ' + second + $('#second').is(':visible') + $('#second').val());
+          e.preventDefault();
+          var url =
+            'http://travel.columbusdirect.com.au/landingService.cfm?goingToOtherCountries=Y&agentCode=COZ&sourceCode=&responseCode=&locale=en_GB&groupType=GRP' +
+            $('#type').val() +
+            '&startDate=' +
+            $('#datepicker').val() +
+            '&endDate=' +
+            $('#datepicker2').val() +
+            $('#travellers').val() +
+            '&pmAge_1=' +
+            $('#first').val() +
+            '&pmAge_2=' +
+            $('#second').val() +
+            '&pmAge_3=' +
+            $('#third').val() +
+            '&pmAge_4=' +
+            $('#fourth').val() +
+            '&pmAge_5=' +
+            $('#fifth').val() +
+            '&pmAge_6=' +
+            $('#sixth').val() +
+            '&pmAge_7=' +
+            $('#seventh').val() +
+            '&pmAge_8=' +
+            $('#eigth').val() +
+            '&numberOfTripDays=' +
+            $('.calculated').val() +
+            $('#destination').val() +
+            '&clickMe=true&form.policy_xml';
+          //alert(url);
+          window.location = url;
+        }
+    var errors = [];
+    if (
+      $('#first').val() < 19 &&
+      $('#destination').val() === '' &&
+      $('#datepicker').val() === '' &&
+      $('#datepicker2').val() === ''
+    ) {
+      errors[errors.length] = '';
+    }
+    if (errors.length > 0) {
+      $('#errors, #errors2, #region-error').show();
+      return false;
+    } else if (
+      $('#first').val() < 19 &&
+      $('#datepicker').val() === '' &&
+      $('#destination').val() === ''
+    ) {
+      errors[errors.length] = '';
+    }
+    if (errors.length > 0) {
+      $('#errors, #errors2, #region-error').show();
+      return false;
+    } else if (
+      $('#first').val() < 19 &&
+      $('#destination').val() === '' &&
+      $('#datepicker2').val() === ''
+    ) {
+      errors[errors.length] = '';
+    }
+    if (errors.length > 0) {
+      $('#errors, #errors2, #region-error').show();
+      return false;
+    } else if ($('#first').val() < 19 && $('#datepicker').val() === '') {
+      errors[errors.length] = '';
+    }
+    if (errors.length > 0) {
+      $('#errors, #errors2').show();
+      return false;
+    } else if ($('#first').val() < 19 && $('#datepicker2').val() === '') {
+      errors[errors.length] = '';
+    }
+    if (errors.length > 0) {
+      $('#errors, #errors2').show();
+      return false;
+    } else if ($('#first').val() < 19 && $('#destination').val() === '') {
+      errors[errors.length] = '';
+    }
+    if (errors.length > 0) {
+      $('#errors, #region-error').show();
+      return false;
+    } else if (
+      $('#datepicker').val() === '' &&
+      $('#destination').val() === ''
+    ) {
+      errors[errors.length] = '';
+    }
+    if (errors.length > 0) {
+      $('#errors2, #region-error').show();
+      return false;
+    } else if (
+      $('#datepicker2').val() === '' &&
+      $('#destination').val() === ''
+    ) {
+      errors[errors.length] = '';
+    }
+    if (errors.length > 0) {
+      $('#errors2, #region-error').show();
+      return false;
+    } else if ($('#destination').val() === '') {
+      errors[errors.length] = '';
+    }
+    if (errors.length > 0) {
+      $('#region-error').show();
+      return false;
+    } else if (
+      $('#first').val() < 19 &&
+      $('#travellers').val() == '&numberOfTravellers=1'
+    ) {
+      errors[errors.length] = '';
+    }
+    if (errors.length > 0) {
+      $('#errors').show();
+      return false;
+    } else if (
+      $('#first').val() < 19 &&
+      $('#travellers').val() == '&numberOfTravellers=2'
+    ) {
+      errors[errors.length] = '';
+    }
+    if (errors.length > 0) {
+      $('#errors').show();
+      return false;
+    } else if (
+      $('#first').val() < 19 &&
+      $('#travellers').val() == '&numberOfTravellers=3'
+    ) {
+      errors[errors.length] = '';
+    }
+    if (errors.length > 0) {
+      $('#errors').show();
+    } else if (
+      $('#first').val() < 19 &&
+      $('#travellers').val() == '&numberOfTravellers=4'
+    ) {
+      errors[errors.length] = '';
+    }
+    if (errors.length > 0) {
+      $('#errors').show();
+    } else if (
+      $('#first').val() < 19 &&
+      $('#travellers').val() == '&numberOfTravellers=5'
+    ) {
+      errors[errors.length] = '';
+    }
+    if (errors.length > 0) {
+      $('#errors').show();
+    } else if (
+      $('#first').val() < 19 &&
+      $('#travellers').val() == '&numberOfTravellers=6'
+    ) {
+      errors[errors.length] = '';
+    }
+    if (errors.length > 0) {
+      $('#errors').show();
+    } else if (
+      $('#first').val() < 19 &&
+      $('#travellers').val() == '&numberOfTravellers=7'
+    ) {
+      errors[errors.length] = '';
+    }
+    if (errors.length > 0) {
+      $('#errors').show();
+    } else if (
+      $('#first').val() < 19 &&
+      $('#travellers').val() == '&numberOfTravellers=8'
+    ) {
+      errors[errors.length] = '';
+    }
+    if (errors.length > 0) {
+      $('#errors').show();
+    }
+    //second
+
+    var errors = [];
+    if ($('#datepicker').val() == '') {
+      errors[errors.length] = '';
+    }
+    if (errors.length > 0) {
+      $('#errors2').show();
+      return false;
+    }
+    var errors = [];
+    if ($('#datepicker2').val() == '') {
+      errors[errors.length] = '';
+    }
+    if (errors.length > 0) {
+      $('#errors2').show();
+      return false;
+    }
+
+    var errors = [];
+    if (
+      $('#second').val() == '' &&
+      $('#travellers').val() == '&numberOfTravellers=2'
+    ) {
+      errors[errors.length] = '';
+    }
+    if (errors.length > 0) {
+      $('#errors').show();
+      return false;
+    }
+    var errors = [];
+    if (
+      $('#third').val() == '' &&
+      $('#travellers').val() == '&numberOfTravellers=3'
+    ) {
+      errors[errors.length] = '';
+    }
+    if (errors.length > 0) {
+      $('#errors').show();
+      return false;
+    }
+    var errors = [];
+    if (
+      $('#fourth').val() == '' &&
+      $('#travellers').val() == '&numberOfTravellers=4'
+    ) {
+      errors[errors.length] = '';
+    }
+    if (errors.length > 0) {
+      $('#errors').show();
+      return false;
+    }
+    var errors = [];
+    if (
+      $('#fifth').val() == '' &&
+      $('#travellers').val() == '&numberOfTravellers=5'
+    ) {
+      errors[errors.length] = '';
+    }
+    if (errors.length > 0) {
+      $('#errors').show();
+      return false;
+    }
+    var errors = [];
+    if (
+      $('#sixth').val() == '' &&
+      $('#travellers').val() == '&numberOfTravellers=6'
+    ) {
+      errors[errors.length] = '';
+    }
+    if (errors.length > 0) {
+      $('#errors').show();
+      return false;
+    }
+    var errors = [];
+    if (
+      $('#seventh').val() == '' &&
+      $('#travellers').val() == '&numberOfTravellers=7'
+    ) {
+      errors[errors.length] = '';
+    }
+    if (errors.length > 0) {
+      $('#errors').show();
+      return false;
+    }
+    var errors = [];
+    if (
+      $('#eigth').val() == '' &&
+      $('#travellers').val() == '&numberOfTravellers=8'
+    ) {
+      errors[errors.length] = '';
+    }
+    if (errors.length > 0) {
+      $('#errors').show();
+      return false;
+    }
+
+    //region error//
+    var errors = [];
+    if ($('#destination').val() == '') {
+      errors[errors.length] = '';
+    }
+    if (errors.length > 0) {
+      $('#region-error').show();
+      return false;
+    }
+    //region error//
+  });
+}
+if ($('body').hasClass('nz')) {
+  $('#destination').on('change', function () {
+    if ($(this).val() !== 'select') {
+      $('#region-error').hide();
+    } else {
+      $('#region-error').show();
+    }
+  });
+
+  $('#first').keypress(function () {
+    $('#errors').hide();
+  });
+
+  $('#datepicker, #datepicker2').change(function () {
+    $('#errors2').hide();
+  });
+  // Link build //
+}
+
+// Link build //
+
+//NZ QQ//
+// Calculate number of days travelling //
+if ($('body').hasClass('nz')) {
+  $('#datepicker').datepicker({
+    dateFormat: 'dd/mm/yy',
+    changeMonth: false,
+    changeYear: false,
+    minDate: 0,
+    maxDate: '+365D',
+  });
+  $('#datepicker2').datepicker({
+    dateFormat: 'dd/mm/yy',
+    changeMonth: false,
+    changeYear: false,
+    maxDate: '+365D',
+  });
+  $('#datepicker')
+    .datepicker()
+    .bind('change', function () {
+      var minValue = $(this).val();
+      minValue = $.datepicker.parseDate('dd/mm/yy', minValue);
+      $('#datepicker2').datepicker('option', 'minDate', minValue);
+      calculate();
+    });
+  $('#datepicker2')
+    .datepicker()
+    .bind('change', function () {
+      var maxValue = $(this).val();
+      maxValue = $.datepicker.parseDate('dd/mm/yy', maxValue);
+      calculate();
+    });
+
+  function calculate() {
+    var d1 = $('#datepicker').datepicker('getDate');
+    var d2 = $('#datepicker2').datepicker('getDate');
+    var diff = 1;
+    if (d1 && d2) {
+      diff = diff + Math.floor((d2.getTime() - d1.getTime()) / 86400000); // ms per day
+    }
+    $('.calculated').val(diff);
+  }
+
+  // Calculate number of days travelling //
+  $('#travellers').on('change', function () {
+    if ($(this).val() === '&numberOfTravellers=2') {
+      $('#otherType2').show();
+    } else {
+      $('#otherType2').hide();
+    }
+  });
+  $('#travellers').on('change', function () {
+    if ($(this).val() === '&numberOfTravellers=3') {
+      $('#otherType2, #otherType3').show();
+    } else {
+      $('#otherType3').hide();
+    }
+  });
+  $('#travellers').on('change', function () {
+    if ($(this).val() === '&numberOfTravellers=4') {
+      $('#otherType2, #otherType3, #otherType4').show();
+    } else {
+      $('#otherType4').hide();
+    }
+  });
+  $('#travellers').on('change', function () {
+    if ($(this).val() === '&numberOfTravellers=5') {
+      $('#otherType2, #otherType3, #otherType4, #otherType5').show();
+    } else {
+      $('#otherType5').hide();
+    }
+  });
+  $('#travellers').on('change', function () {
+    if ($(this).val() === '&numberOfTravellers=6') {
+      $(
+        '#otherType2, #otherType3, #otherType4, #otherType5, #otherType6',
+      ).show();
+    } else {
+      $('#otherType6').hide();
+    }
+  });
+  $('#travellers').on('change', function () {
+    if ($(this).val() === '&numberOfTravellers=7') {
+      $(
+        '#otherType2, #otherType3, #otherType4, #otherType5, #otherType6, #otherType7',
+      ).show();
+    } else {
+      $('#otherType7').hide();
+    }
+  });
+  $('#travellers').on('change', function () {
+    if ($(this).val() === '&numberOfTravellers=8') {
+      $(
+        '#otherType2, #otherType3, #otherType4, #otherType5, #otherType6, #otherType7, #otherType8',
+      ).show();
+    } else {
+      $('#otherType8').hide();
+    }
+  });
+}
+// Age selection //
+// Change destinations based on type of cover //
+if ($('body').hasClass('nz')) {
+  $('#type').change(function () {
+    var val = $(this).val();
+    if (val === '&policyTypeOption=ST_ST') {
+      $('#destination').html(
+        '<option id="dom" value="&area=ALOZLOZAUS1">Domestic</option><option id="southp" value="&area=GLNZLNZNZD2">South Pacific</option><option id="asia" value="&area=HLNZLNZNZD6">Asia</option><option id="europe" value="&area=JLNZLNZNZD3">Europe</option><option id="wwexc" value="&area=KLNZLNZNZD4">Worldwide Excl. USA & Canada</option><option value="&area=LLNZLNZNZD5">Worldwide</option>',
+      );
+    } else if (val == '&policyTypeOption=MT_MT') {
+      $('#destination').html(
+        '<option id="wwexc" value="&area=KLNZLNZNZD4">Worldwide Excl. USA & Canada</option><option value="&area=LLNZLNZNZD5">Worldwide</option>',
+      );
+    } else if (val == '&policyTypeOption=ST_ST&winterSports=Y') {
+      $('#destination').html(
+        '<option id="dom" value="&area=ALOZLOZAUS1">Domestic</option><option id="southp" value="&area=GLNZLNZNZD2">South Pacific</option><option id="asia" value="&area=HLNZLNZNZD6">Asia</option><option id="europe" value="&area=JLNZLNZNZD3">Europe</option><option id="wwexc" value="&area=KLNZLNZNZD4">Worldwide Excl. USA & Canada</option><option value="&area=LLNZLNZNZD5">Worldwide</option>',
+      );
+    } else if (val == '&policyTypeOption=MT_MT&winterSports=Y') {
+      $('#destination').html(
+        '<option id="wwexc" value="&area=KLNZLNZNZD4">Worldwide Excl. USA & Canada</option><option value="&area=LLNZLNZNZD5">Worldwide</option>',
+      );
+    }
+  });
+  // Change destinations based on type of cover //
+
+  // Change datepicker based on type of cover //
+  $('#type').change(function () {
+    var val = $(this).val();
+    if (val === '&policyTypeOption=ST_ST') {
+      $('#return').show();
+    } else if (val == '&policyTypeOption=MT_MT') {
+      $('#return').hide();
+    } else if (val === '&policyTypeOption=ST_ST&winterSports=Y') {
+      $('#return').show();
+    } else if (val == '&policyTypeOption=MT_MT&winterSports=Y') {
+      $('#return').hide();
+    }
+  });
+  // Change datepicker based on type of cover //
+
+  // info icon click show and hide //
+  $('.info-icon-img').click(function () {
+    $('.info-container').show();
+  });
+  $('.info-icon-img2').click(function () {
+    $('.info-container2').show();
+  });
+  $('.info-icon-img3').click(function () {
+    $('.info-container3').show();
+  });
+  $('.info-icon-img4').click(function () {
+    $('.info-container4').show();
+  });
+  $('.info-icon-img-winter').click(function () {
+    $('.info-container-winter').show();
+  });
+  $('.info-icon-img-winter2').click(function () {
+    $('.info-container-winter2').show();
+  });
+  $('.singletrip-close-img').click(function () {
+    $(
+      '.info-container, .info-container2, .info-container3, .info-container4, .info-container-winter, .info-container-winter2',
+    ).hide();
+  });
+  // info icon click show and hide //
+  // Change info icons //
+}
+if ($('body').hasClass('nz')) {
+  $('#type').change(function () {
+    var val = $(this).val();
+    if (val === '&policyTypeOption=ST_ST') {
+      $('.info-icon2, .info-icon-winter, .info-icon-winter2').hide();
+    } else if (val == '&policyTypeOption=MT_MT') {
+      $('.info-icon2').show();
+    } else if (val == '&policyTypeOption=MT_MT&winterSports=Y') {
+      $('.info-icon-winter2').show();
+    } else if (val == '&policyTypeOption=ST_ST&winterSports=Y') {
+      $('.info-icon2, .info-icon-winter2, .info-icon').hide();
+    }
+  });
+
+  $('#destination').change(function () {
+    var val = $(this).val();
+    if (val === '&area=GLNZLNZNZD2') {
+      $('.info-icon4').show();
+    } else if (val == '&area=HLNZLNZNZD6') {
+      $(
+        '.info-icon-select, .info-icon4, .info-icon6, .info-icon7, .info-icon8',
+      ).hide();
+    } else if (val == '&area=KLNZLNZNZD4') {
+      $(
+        '.info-icon-select, .info-icon4, .info-icon5, .info-icon6, .info-icon8',
+      ).hide();
+    } else if (val == '&area=LLNZLNZNZD5') {
+      $(
+        '.info-icon-select, .info-icon4, .info-icon5, .info-icon6, .info-icon7',
+      ).hide();
+    } else if (val == '&area=JLNZLNZNZD3') {
+      $(
+        '.info-icon-select, .info-icon4, .info-icon5, .info-icon7, .info-icon8',
+      ).hide();
+    } else if (val == 'select') {
+      $(
+        '.info-icon4, .info-icon5, .info-icon6, .info-icon7, info-icon8',
+      ).hide();
+    }
+  });
+  $('#destination').change(function () {
+    var val = $(this).val();
+    if (val === '&area=HLNZLNZNZD6') {
+      $('.info-icon5').show();
+    } else if (val == '&area=GLNZLNZNZD2') {
+      $(
+        '.info-icon-select, .info-icon5, .info-icon6, .info-icon7, .info-icon8',
+      ).hide();
+    }
+  });
+  $('#destination').change(function () {
+    var val = $(this).val();
+    if (val === '&area=JLNZLNZNZD3') {
+      $('.info-icon6').show();
+    }
+  });
+  $('#destination').change(function () {
+    var val = $(this).val();
+    if (val === '&area=KLNZLNZNZD4') {
+      $('.info-icon7').show();
+    }
+  });
+  $('#destination').change(function () {
+    var val = $(this).val();
+    if (val === '&area=LLNZLNZNZD5') {
+      $('.info-icon8').show();
+    }
+  });
+  $('#destination').change(function () {
+    var val = $(this).val();
+    if (val === 'select') {
+      $('.info-icon-select').show();
+    }
+  });
+}
+// Change info icons //
+// Link build //
+if ($('body').hasClass('nz')) {
+  $(document).on('click', '#make_url', function (e) {
+    var first =
+      $('#first').is(':visible') && $('#first').val() > 18 ? true : false;
+    var second =
+      $('#second').is(':visible') && $('#second').val() != '' ? true : false;
+    var second =
+      $('#third').is(':visible') && $('#third').val() != '' ? true : false;
+    var second =
+      $('#fourth').is(':visible') && $('#fourth').val() != '' ? true : false;
+    var second =
+      $('#fifth').is(':visible') && $('#fifth').val() != '' ? true : false;
+    var second =
+      $('#sixth').is(':visible') && $('#sixth').val() != '' ? true : false;
+    var second =
+      $('#seventh').is(':visible') && $('#seventh').val() != '' ? true : false;
+    var second =
+      $('#eigth').is(':visible') && $('#eigth').val() != '' ? true : false;
+
+    //if (!$('#first').val() == "" && $('#travellers').val() == "1")
+    // if (!$('#second').val() == "" && $('#travellers').val() == "&numberOfTravellers=2")
+    //if (!$('#third').val() == "" && $('#travellers').val() == "&numberOfTravellers=3")
+    //if (!$('#fourth').val() == "" && $('#travellers').val() == "&numberOfTravellers=4")
+    //if (!$('#fifth').val() == "" && $('#travellers').val() == "&numberOfTravellers=5")
+    //if (!$('#sixth').val() == "" && $('#travellers').val() == "&numberOfTravellers=6")
+    //if (!$('#seventh').val() ==""&& $('#travellers').val() == "&numberOfTravellers=7")
+    //if (!$('#eigth').val() == ""&& $('#travellers').val() == "&numberOfTravellers=8")
+    if (!$('#datepicker').val() == '')
+      if (!$('#datepicker2').val() == '')
+        if (!$('#destination').val() == '' && first) {
+          e.preventDefault();
+          var url =
+            'http://travel.columbusdirect.co.nz/landingService.cfm?goingToOtherCountries=Y&agentCode=COZ&sourceCode=&responseCode=&locale=en_GB&groupType=GRP' +
+            $('#type').val() +
+            '&startDate=' +
+            $('#datepicker').val() +
+            '&endDate=' +
+            $('#datepicker2').val() +
+            $('#travellers').val() +
+            '&pmAge_1=' +
+            $('#first').val() +
+            '&pmAge_2=' +
+            $('#second').val() +
+            '&pmAge_3=' +
+            $('#third').val() +
+            '&pmAge_4=' +
+            $('#fourth').val() +
+            '&pmAge_5=' +
+            $('#fifth').val() +
+            '&pmAge_6=' +
+            $('#sixth').val() +
+            '&pmAge_7=' +
+            $('#seventh').val() +
+            '&pmAge_8=' +
+            $('#eigth').val() +
+            '&numberOfTripDays=' +
+            $('.calculated').val() +
+            $('#destination').val() +
+            '&clickMe=true&form.policy_xml';
+          window.location = url;
+        }
+    var errors = [];
+    if (
+      $('#first').val() < 19 &&
+      $('#destination').val() === '' &&
+      $('#datepicker').val() === '' &&
+      $('#datepicker2').val() === ''
+    ) {
+      errors[errors.length] = '';
+    }
+    if (errors.length > 0) {
+      $('#errors, #errors2, #region-error').show();
+      return false;
+    } else if (
+      $('#first').val() < 19 &&
+      $('#datepicker').val() === '' &&
+      $('#destination').val() === ''
+    ) {
+      errors[errors.length] = '';
+    }
+    if (errors.length > 0) {
+      $('#errors, #errors2, #region-error').show();
+      return false;
+    } else if (
+      $('#first').val() < 19 &&
+      $('#destination').val() === '' &&
+      $('#datepicker2').val() === ''
+    ) {
+      errors[errors.length] = '';
+    }
+    if (errors.length > 0) {
+      $('#errors, #errors2, #region-error').show();
+      return false;
+    } else if ($('#first').val() < 19 && $('#datepicker').val() === '') {
+      errors[errors.length] = '';
+    }
+    if (errors.length > 0) {
+      $('#errors, #errors2').show();
+      return false;
+    } else if ($('#first').val() < 19 && $('#datepicker2').val() === '') {
+      errors[errors.length] = '';
+    }
+    if (errors.length > 0) {
+      $('#errors, #errors2').show();
+      return false;
+    } else if ($('#first').val() < 19 && $('#destination').val() === '') {
+      errors[errors.length] = '';
+    }
+    if (errors.length > 0) {
+      $('#errors, #region-error').show();
+      return false;
+    } else if (
+      $('#datepicker').val() === '' &&
+      $('#destination').val() === ''
+    ) {
+      errors[errors.length] = '';
+    }
+    if (errors.length > 0) {
+      $('#errors2, #region-error').show();
+      return false;
+    } else if (
+      $('#datepicker2').val() === '' &&
+      $('#destination').val() === ''
+    ) {
+      errors[errors.length] = '';
+    }
+    if (errors.length > 0) {
+      $('#errors2, #region-error').show();
+      return false;
+    } else if ($('#destination').val() === '') {
+      errors[errors.length] = '';
+    }
+    if (errors.length > 0) {
+      $('#region-error').show();
+      return false;
+    } else if (
+      $('#first').val() < 19 &&
+      $('#travellers').val() == '&numberOfTravellers=1'
+    ) {
+      errors[errors.length] = '';
+    }
+    if (errors.length > 0) {
+      $('#errors').show();
+      return false;
+    } else if (
+      $('#first').val() < 19 &&
+      $('#travellers').val() == '&numberOfTravellers=2'
+    ) {
+      errors[errors.length] = '';
+    }
+    if (errors.length > 0) {
+      $('#errors').show();
+      return false;
+    } else if (
+      $('#first').val() < 19 &&
+      $('#travellers').val() == '&numberOfTravellers=3'
+    ) {
+      errors[errors.length] = '';
+    }
+    if (errors.length > 0) {
+      $('#errors').show();
+    } else if (
+      $('#first').val() < 19 &&
+      $('#travellers').val() == '&numberOfTravellers=4'
+    ) {
+      errors[errors.length] = '';
+    }
+    if (errors.length > 0) {
+      $('#errors').show();
+    } else if (
+      $('#first').val() < 19 &&
+      $('#travellers').val() == '&numberOfTravellers=5'
+    ) {
+      errors[errors.length] = '';
+    }
+    if (errors.length > 0) {
+      $('#errors').show();
+    } else if (
+      $('#first').val() < 19 &&
+      $('#travellers').val() == '&numberOfTravellers=6'
+    ) {
+      errors[errors.length] = '';
+    }
+    if (errors.length > 0) {
+      $('#errors').show();
+    } else if (
+      $('#first').val() < 19 &&
+      $('#travellers').val() == '&numberOfTravellers=7'
+    ) {
+      errors[errors.length] = '';
+    }
+    if (errors.length > 0) {
+      $('#errors').show();
+    } else if (
+      $('#first').val() < 19 &&
+      $('#travellers').val() == '&numberOfTravellers=8'
+    ) {
+      errors[errors.length] = '';
+    }
+    if (errors.length > 0) {
+      $('#errors').show();
+    }
+    //second
+
+    var errors = [];
+    if ($('#datepicker').val() == '') {
+      errors[errors.length] = '';
+    }
+    if (errors.length > 0) {
+      $('#errors2').show();
+      return false;
+    }
+    var errors = [];
+    if ($('#datepicker2').val() == '') {
+      errors[errors.length] = '';
+    }
+    if (errors.length > 0) {
+      $('#errors2').show();
+      return false;
+    }
+
+    var errors = [];
+    if (
+      $('#second').val() == '' &&
+      $('#travellers').val() == '&numberOfTravellers=2'
+    ) {
+      errors[errors.length] = '';
+    }
+    if (errors.length > 0) {
+      $('#errors').show();
+      return false;
+    }
+    var errors = [];
+    if (
+      $('#third').val() == '' &&
+      $('#travellers').val() == '&numberOfTravellers=3'
+    ) {
+      errors[errors.length] = '';
+    }
+    if (errors.length > 0) {
+      $('#errors').show();
+      return false;
+    }
+    var errors = [];
+    if (
+      $('#fourth').val() == '' &&
+      $('#travellers').val() == '&numberOfTravellers=4'
+    ) {
+      errors[errors.length] = '';
+    }
+    if (errors.length > 0) {
+      $('#errors').show();
+      return false;
+    }
+    var errors = [];
+    if (
+      $('#fifth').val() == '' &&
+      $('#travellers').val() == '&numberOfTravellers=5'
+    ) {
+      errors[errors.length] = '';
+    }
+    if (errors.length > 0) {
+      $('#errors').show();
+      return false;
+    }
+    var errors = [];
+    if (
+      $('#sixth').val() == '' &&
+      $('#travellers').val() == '&numberOfTravellers=6'
+    ) {
+      errors[errors.length] = '';
+    }
+    if (errors.length > 0) {
+      $('#errors').show();
+      return false;
+    }
+    var errors = [];
+    if (
+      $('#seventh').val() == '' &&
+      $('#travellers').val() == '&numberOfTravellers=7'
+    ) {
+      errors[errors.length] = '';
+    }
+    if (errors.length > 0) {
+      $('#errors').show();
+      return false;
+    }
+    var errors = [];
+    if (
+      $('#eigth').val() == '' &&
+      $('#travellers').val() == '&numberOfTravellers=8'
+    ) {
+      errors[errors.length] = '';
+    }
+    if (errors.length > 0) {
+      $('#errors').show();
+      return false;
+    }
+
+    //region error//
+    var errors = [];
+    if ($('#destination').val() == '') {
+      errors[errors.length] = '';
+    }
+    if (errors.length > 0) {
+      $('#region-error').show();
+      return false;
+    }
+    //region error//
+  });
+}
+if ($('body').hasClass('nz')) {
+  $('#destination').on('change', function () {
+    if ($(this).val() !== 'select') {
+      $('#region-error').hide();
+    } else {
+      $('#region-error').show();
+    }
+  });
+
+  $('#first').keypress(function () {
+    $('#errors').hide();
+  });
+
+  $('#datepicker, #datepicker2').change(function () {
+    $('#errors2').hide();
+  });
+  // Link build //
+}
+//ITALY MOBILE CTA //
+$('.hidden-cta-container').click(function () {
+  $('html,body').animate({
+    scrollTop: $('.qq-form').offset().top,
+  });
+});
+$(document).scroll(function () {
+  var y = $(this).scrollTop();
+  if (y > 1000 && $(window).width() <= 850) {
+    $('.hidden-cta-container').fadeIn();
+  } else {
+    $('.hidden-cta-container').fadeOut();
+  }
+});
+//UK MOBILE CTA //
+$('.uk-hidden-cta-container').click(function () {
+  $('html,body').animate({
+    scrollTop: $('.widget-container').offset().top,
+  });
+});
+$(document).scroll(function () {
+  var y = $(this).scrollTop();
+  if (y > 1000 && $(window).width() <= 850) {
+    $('.uk-hidden-cta-container').fadeIn();
+  } else {
+    $('.uk-hidden-cta-container').fadeOut();
+  }
+});
+$(document).ready(function () {
+  $('.close-qq-container').append(
+    '<a href="#" id="close" class="button-close"></a>',
+  ),
+    $('a#open-example1').click(function () {
+      return (
+        $('.iframe-container-tg').fadeIn('fast'),
+        $('#open-example1').fadeOut(10),
+        $('body').css('overflow', 'hidden'),
+        !1
+      );
+    }),
+    $('a#close').click(function () {
+      return (
+        $('.iframe-container-tg').fadeOut('fast'),
+        $('#open-example1').fadeIn(10),
+        $('body').css('overflow', 'auto'),
+        !1
+      );
+    });
+});
+$('.slide-toggle').click(function () {
+  $('.travel-nav').animate({
+    width: 'toggle',
+  });
+});
