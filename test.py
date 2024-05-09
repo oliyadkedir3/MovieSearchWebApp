@@ -1,5 +1,6 @@
 import datetime
 import subprocess
+import os
 
 def generate_fake_commits():
     # Define the start and end dates for the year 2023
@@ -9,6 +10,8 @@ def generate_fake_commits():
     # Loop through each day of the year
     current_date = start_date
     while current_date <= end_date:
+        # Set the GIT_COMMITTER_DATE environment variable
+        os.environ['GIT_COMMITTER_DATE'] = current_date.strftime('%Y-%m-%d 12:00:00')
         # Generate a fake commit message
         commit_message = f"Fake commit on {current_date.strftime('%Y-%m-%d')}"
         # Execute the fake commit
