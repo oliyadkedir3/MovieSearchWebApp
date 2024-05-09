@@ -14,15 +14,14 @@ def create_commits_for_year(year, repo_path):
         with open(filename, 'w') as f:
             f.write(f"Commit for {current_date}")
         
-        # Set the commit date to the current date
-        commit_date = current_date.strftime('%Y-%m-%d %H:%M:%S')
-        env = os.environ.copy()
-        env['GIT_AUTHOR_DATE'] = commit_date
-        env['GIT_COMMITTER_DATE'] = commit_date
-
         subprocess.run(['git', 'add', filename], cwd=repo_path)
-        subprocess.run(['git', 'commit', '-m', f'Commit for {current_date}'], cwd=repo_path, env=env)
+        subprocess.run(['git', 'commit', '-m', f'Commit for {current_date}', '--date', current_date.strftime('%Y-%m-%d %H:%M:%S')], cwd=repo_path)
+        
         current_date += delta
+
+    # Push commits to a new branch
+    subprocess.run(['git', 'checkout', '-b', 'contributions'], cwd=repo_path)
+    subprocess.run(['git', 'push', 'origin', 'contributions'], cwd=repo_path)
 
 if __name__ == "__main__":
     year = int(input("Enter the year to make contributions for: "))
