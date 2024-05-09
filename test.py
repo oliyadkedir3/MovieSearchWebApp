@@ -13,8 +13,15 @@ def create_commits_for_year(year, repo_path):
         filename = os.path.join(repo_path, f"commit_{current_date.strftime('%Y-%m-%d')}.txt")
         with open(filename, 'w') as f:
             f.write(f"Commit for {current_date}")
+        
+        # Set the commit date to the current date
+        commit_date = current_date.strftime('%Y-%m-%d %H:%M:%S')
+        env = os.environ.copy()
+        env['GIT_AUTHOR_DATE'] = commit_date
+        env['GIT_COMMITTER_DATE'] = commit_date
+
         subprocess.run(['git', 'add', filename], cwd=repo_path)
-        subprocess.run(['git', 'commit', '-m', f'Commit for {current_date}'], cwd=repo_path)
+        subprocess.run(['git', 'commit', '-m', f'Commit for {current_date}'], cwd=repo_path, env=env)
         current_date += delta
 
 if __name__ == "__main__":
