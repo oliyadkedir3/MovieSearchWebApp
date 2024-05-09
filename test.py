@@ -19,6 +19,10 @@ def create_commits_for_year(year, repo_path):
         
         current_date += delta
 
+    # Push commits to a new branch
+    subprocess.run(['git', 'checkout', '-b', 'contributions'], cwd=repo_path)
+    subprocess.run(['git', 'push', 'origin', 'contributions'], cwd=repo_path)
+
 if __name__ == "__main__":
     year = 2023  # Year for which you want to create commits
     repo_path = input("Enter the path to your Git repository: ")
