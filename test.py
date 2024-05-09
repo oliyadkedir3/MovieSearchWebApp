@@ -1,29 +1,20 @@
-import os
 import datetime
 import subprocess
 
-def create_commits_for_year(year, repo_path):
-    start_date = datetime.date(year, 1, 1)
-    end_date = datetime.date(year, 12, 31)
+def generate_fake_commits():
+    # Define the start and end dates for the year 2023
+    start_date = datetime.datetime(2023, 1, 1)
+    end_date = datetime.datetime(2023, 12, 31)
 
-    delta = datetime.timedelta(days=1)
+    # Loop through each day of the year
     current_date = start_date
-
     while current_date <= end_date:
-        filename = os.path.join(repo_path, f"commit_{current_date.strftime('%Y-%m-%d')}.txt")
-        with open(filename, 'w') as f:
-            f.write(f"Commit for {current_date}")
-        
-        subprocess.run(['git', 'add', filename], cwd=repo_path)
-        subprocess.run(['git', 'commit', '-m', f'Commit for {current_date}', '--date', current_date.strftime('%Y-%m-%d %H:%M:%S')], cwd=repo_path)
-        
-        current_date += delta
-
-    # Push commits to a new branch
-    subprocess.run(['git', 'checkout', '-b', 'contributions'], cwd=repo_path)
-    subprocess.run(['git', 'push', 'origin', 'contributions'], cwd=repo_path)
+        # Generate a fake commit message
+        commit_message = f"Fake commit on {current_date.strftime('%Y-%m-%d')}"
+        # Execute the fake commit
+        subprocess.run(['git', 'commit', '--allow-empty', '-m', commit_message])
+        # Move to the next day
+        current_date += datetime.timedelta(days=1)
 
 if __name__ == "__main__":
-    year = 2023  # Year for which you want to create commits
-    repo_path = input("Enter the path to your Git repository: ")
-    create_commits_for_year(year, repo_path)
+    generate_fake_commits()
